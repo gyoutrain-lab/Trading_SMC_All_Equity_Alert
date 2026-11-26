@@ -416,7 +416,7 @@ async function kfRaw(sym,tf){
         R.timestamp.forEach((t,i)=>{if(q.close[i]==null||q.open[i]==null||q.high[i]==null||q.low[i]==null)return;d.push({t:t*1e3,o:+q.open[i],h:+q.high[i],l:+q.low[i],c:+q.close[i],v:+q.volume[i]||0})});
         if(d.length<30)throw 0;KF.good=r;KF.src=(r===0&&FPU()?'Yahoo via your Worker':KF.names[r]);return d}
       catch(e){if(e&&(e.name==='AbortError'||e instanceof TypeError)){KF.dead[r]=Date.now();errs.push(KF.names[r]+'(net)');break}errs.push(KF.names[r]+'/'+h+'(no data)')}}}
-  throw new Error('No free feed reachable for '+sym+' ('+errs.slice(0,4).join(' ')+'). Use normal Chrome, pause ad-blockers, set Private DNS to one.one.one.one, or add a Twelve Data key as backup.')}
+  throw new Error('No free feed reachable for '+sym+' ('+errs.slice(0,4).join(' ')+').'+(FPU()?' Your Worker URL is set but the reply failed: check the URL (it must start with https:// and end with .workers.dev) and press Network check.':' Stocks and ETFs have no browser-safe free feed: paste your Cloudflare Worker URL (worker/feed-proxy.js) in the Feed Worker URL box, or add a Twelve Data key and set Source to Twelve Data first.'))}
 function kfAgg(d,ms){const o=[];let c=null;for(const x of d){const b=Math.floor(x.t/ms)*ms;if(!c||c.t!==b){c={t:b,o:x.o,h:x.h,l:x.l,c:x.c,v:x.v};o.push(c)}else{c.h=Math.max(c.h,x.h);c.l=Math.min(c.l,x.l);c.c=x.c;c.v+=x.v}}return o}
 async function kfTd(sym,tf,force,abort){
   const k='kf:'+sym+'|'+tf;let c=cache.get(k);if(!c){c=loadPers(k);if(c)cache.set(k,c)}
