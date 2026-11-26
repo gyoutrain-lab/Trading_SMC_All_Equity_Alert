@@ -395,7 +395,16 @@ const KF={dead:{},good:null,src:'',on:true,iv:{'1m':'1m','5m':'5m','15m':'15m','
  y:s=>{s=s.toUpperCase();if(KF.IDX[s])return KF.IDX[s];if(/^[A-Z]{3,5}\/[A-Z]{3}$/.test(s)){const[a,b]=s.split('/');return /^(BTC|ETH|SOL|XRP|BNB|DOGE|ADA|LTC|AVAX|LINK|DOT)$/.test(a)?a+'-'+b:a+b+'=X'}return s.replace('/','-')},
  routes:[u=>u,u=>'https://corsproxy.io/?url='+encodeURIComponent(u),u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u)],
  names:['Yahoo direct','Yahoo via relay 1','Yahoo via relay 2','Yahoo via relay 3']};
+/* Kraken spot FX (CORS-open, no key): EUR/GBP/AUD vs USD, USD vs CAD/CHF/JPY; every other pair/cross is built from these legs */
+const KK={EUR:['EURUSD',0],GBP:['GBPUSD',0],AUD:['AUDUSD',0],CAD:['USDCAD',1],CHF:['USDCHF',1],JPY:['USDJPY',1]};
+async function krLeg(c,tf){if(c==='USD')return null;const e=KK[c];if(!e||!KR[tf])throw 0;
+  const j=await _J('https://api.kraken.com/0/public/OHLC?pair='+e[0]+'&interval='+KR[tf]),k=Object.keys(j.result||{}).find(x=>x!=='last');if(!k)throw 0;
+  const m=new Map();j.result[k].forEach(x=>{let o=+x[1],h=+x[2],l=+x[3],c2=+x[4];if(e[1]){const H=1/l,L=1/h;o=1/o;c2=1/c2;h=H;l=L}m.set(+x[0]*1e3,{o,h,l,c:c2,v:+x[6]||0})});return m}
+async function krFx(sym,tf){const[a,b]=sym.split('/'),[A,B]=await Promise.all([krLeg(a,tf),krLeg(b,tf)]),u={o:1,h:1,l:1,c:1,v:0},ks=[...(A||B).keys()].filter(t=>(!A||A.has(t))&&(!B||B.has(t))).sort((x,y)=>x-y);
+  return ks.map(t=>{const p=A?A.get(t):u,q=B?B.get(t):u,o=p.o/q.o,c=p.c/q.c;return{t,o,c,h:Math.max(o,c,p.h/q.c,p.c/q.l),l:Math.min(o,c,p.l/q.c,p.c/q.h),v:(p.v||0)+(q.v||0)}})}
 async function kfRaw(sym,tf){
+  const U=sym.toUpperCase();
+  if(/^[A-Z]{3}\/[A-Z]{3}$/.test(U)&&!(KF.dead.kr&&Date.now()-KF.dead.kr<12e4)){try{const d=await krFx(U,tf);if(d&&d.length>=30){KF.good=null;KF.src='Kraken FX';return d}}catch(e){if(e&&(e.name==='AbortError'||e instanceof TypeError))KF.dead.kr=Date.now()}}
   const path=`/v8/finance/chart/${encodeURIComponent(KF.y(sym))}?interval=${KF.iv[tf]}&range=${KF.rg[tf]}&includePrePost=false`,errs=[];
   const order=[KF.good,0,1,2,3].filter((x,i,a)=>x!=null&&a.indexOf(x)===i);
   for(const r of order){if(KF.dead[r]&&Date.now()-KF.dead[r]<12e4){errs.push(KF.names[r]+'(net)');continue}
@@ -445,7 +454,7 @@ async function tdWhy(){
     :'Your internet works but '+TDB().replace('https://','')+' cannot be reached: your network (ISP or DNS) is blocking it. Fix: Android Settings > Network > Private DNS > one.one.one.one (or install Cloudflare 1.1.1.1 / WARP), then reload. Permanent fix: deploy the free Cloudflare Worker (worker/twelvedata-proxy.js) and paste its URL in the proxy box in the header.';
   S.tdw={at:Date.now(),m};return m}
 async function netCheck(){
-  const H=[['Cloudflare','https://www.cloudflare.com/cdn-cgi/trace'],['Google','https://www.gstatic.com/generate_204'],['Twelve Data',TDB()+'/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=1&apikey=probe'],['Binance','https://fapi.binance.com/fapi/v1/ping'],['Bybit','https://api.bybit.com/v5/market/time'],['ntfy','https://ntfy.sh/']],out=[];
+  const H=[['Cloudflare','https://www.cloudflare.com/cdn-cgi/trace'],['Google','https://www.gstatic.com/generate_204'],['Twelve Data',TDB()+'/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=1&apikey=probe'],['Kraken FX (EUR/USD)','https://api.kraken.com/0/public/OHLC?pair=EURUSD&interval=60'],['Yahoo Finance','https://query1.finance.yahoo.com/v8/finance/chart/EURUSD=X?interval=60m&range=5d'],['Binance','https://fapi.binance.com/fapi/v1/ping'],['Bybit','https://api.bybit.com/v5/market/time'],['ntfy','https://ntfy.sh/']],out=[];
   setSrc('Checking network…','demo');
   await Promise.all(H.map(async([n,u])=>{const t0=performance.now(),c=new AbortController();setTimeout(()=>c.abort(),7000);try{await fetch(u,{mode:'no-cors',cache:'no-store',signal:c.signal});out.push(n+': OK '+Math.round(performance.now()-t0)+' ms')}catch(e){out.push(n+': FAILED')}}));
   out.sort();const all=out.every(x=>x.includes('FAILED')),td=out.find(x=>x.startsWith('Twelve Data')),m=out.join('\n')+'\n\nPage: '+location.protocol+'//'+(location.host||'(local file)')+'\n'+(all?'Everything failed: the page is offline or sandboxed (preview or in-app browser). Open the GitHub Pages link in normal Chrome.':td.includes('FAILED')?'Only Twelve Data failed: your network blocks it. Use Private DNS one.one.one.one, WARP, or the proxy URL.':'Network looks fine.');
@@ -453,11 +462,11 @@ async function netCheck(){
 $('#netChk').addEventListener('click',netCheck);
 async function td(sym,tf,force,abort){if(TFMS[tf]<6e4)return tkData(sym,tf);
   if(BN.ok(sym))return bnTd(sym,tf,force,abort);
-  try{return await kfTd(sym,tf,force,abort)}catch(e){if(!TDK()||(e&&e.message==='superseded'))throw e}
+  try{return await kfTd(sym,tf,force,abort)}catch(e){if(!TDK()||(e&&e.message==='superseded'))throw e;KF.err=e&&e.message}
   const k=sym+'|'+tf;let c=cache.get(k);if(!c){c=loadPers(k);if(c)cache.set(k,c)}
   if(c&&!force&&fresh(sym,tf,c))return c.d;
   const stale=m=>{if(c){c.d.stale=true;return c.d}throw new Error(m)};
-  if(store('tdout')===UTCD()||useCr(0)>=CRL())return stale('Daily credit budget used (resets 00:00 UTC) and no cached '+sym+' '+TD[tf]+' data');
+  if(store('tdout')===UTCD()||useCr(0)>=CRL())return stale('Free feed failed ('+(KF.err||'unknown')+') and Twelve Data daily credit budget is used (resets 00:00 UTC), no cached '+sym+' '+TD[tf]+' data');
   await slot(abort);
   useCr(1);
   for(let a=0;a<2;a++){
