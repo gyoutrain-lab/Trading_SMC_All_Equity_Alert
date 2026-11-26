@@ -202,8 +202,8 @@ body.fsOn{overflow:hidden}
 </head>
 <body>
 <header>
-  <h1>SMC <span>Auto Analyzer</span></h1><button id="hdrTog" class="mob" aria-label="Settings" aria-expanded="false">⚙ Settings</button>
-  <input id="key" type="password" placeholder="Optional: Twelve Data key (backup only; every symbol runs keyless)" title="Stored only in this browser"><button id="testKey">Test key</button><button id="netChk">Network check</button><select id="dsrc" class="adv" title="Where candles come from"><option value="auto">Source: free feeds first, Twelve Data backup</option><option value="td">Source: Twelve Data first (uses credits)</option><option value="free">Source: free feeds only</option></select><input id="kfp" class="adv" type="text" placeholder="Optional: feed Worker URL (Kraken/Yahoo relay)" title="Your own Cloudflare Worker, see worker/feed-proxy.js" style="width:210px"><input id="tdp" type="text" placeholder="Optional: proxy URL (if Twelve Data is blocked)" title="Your own Cloudflare Worker URL; leave empty normally" style="width:190px">
+  <h1>SMC <span>Auto Analyzer</span> <small style="color:var(--mut);font-weight:400;font-size:11px">build r8 · key-reset fix</small></h1><button id="hdrTog" class="mob" aria-label="Settings" aria-expanded="false">⚙ Settings</button>
+  <input id="key" type="password" placeholder="Optional: Twelve Data key (backup only; every symbol runs keyless)" title="Stored only in this browser"><button id="testKey">Test key</button><button id="netChk">Network check</button><select id="dsrc" class="adv" title="Where candles come from"><option value="auto">Source: Smart (Twelve Data for FX/stocks if key, Binance for gold/crypto)</option><option value="td">Source: Twelve Data first (uses credits)</option><option value="free">Source: free feeds only</option></select><input id="kfp" class="adv" type="text" placeholder="Optional: feed Worker URL (Kraken/Yahoo relay)" title="Your own Cloudflare Worker, see worker/feed-proxy.js" style="width:210px"><input id="tdp" type="text" placeholder="Optional: proxy URL (if Twelve Data is blocked)" title="Your own Cloudflare Worker URL; leave empty normally" style="width:190px">
   <input id="sym" type="text" value="XAU/USD" list="symlist" title="Twelve Data symbol">
   <datalist id="symlist"><option>XAU/USD<option>XAG/USD<option>EUR/USD<option>GBP/USD<option>USD/JPY<option>AUD/USD<option>SPY<option>QQQ<option>GLD<option>AAPL<option>NVDA<option>BTC/USD<option>ETH/USD<option>GBP/JPY<option>EUR/JPY<option>USD/CAD<option>IWM<option>MSFT<option>TSLA</datalist>
   <select id="tf"><option value="1s">1s Tick</option><option value="5s">5s Tick</option><option value="15s">15s Tick</option><option value="30s">30s Tick</option><option value="1m">1m Scalp</option><option value="5m">5m Scalp</option><option value="15m">15m Intraday</option><option value="1h" selected>1h Day</option><option value="4h">4h Swing</option><option value="1d">1D Position</option></select>
@@ -475,11 +475,11 @@ async function feedTest(){
   const ok=n=>out.some(x=>x.startsWith(n+': OK')),v=ok('Kraken direct')||ok('Kraken via your Worker')?'FX should now work: Kraken is reachable.':ok('Yahoo direct')||ok('Yahoo via your Worker')?'Kraken failed but Yahoo works: FX and stocks run via Yahoo.':FPU()?'Direct AND Worker failed. Check the Worker URL and that it is deployed.':'Kraken and Yahoo are both blocked from this browser. Deploy worker/feed-proxy.js and paste its URL in Feed Worker URL, or use Twelve Data.';
   const m=out.join('\n')+'\n\n'+v+'\nPage: '+location.protocol+'//'+(location.host||'(local file)');setSrc('Feed test done','');log(m.replace(/\n+/g,' | '));try{alert(m)}catch(e){}}
 $('#netChk').addEventListener('click',feedTest);
-const DS=()=>($('#dsrc')&&$('#dsrc').value)||'auto';
+const DS=()=>{const v=($('#dsrc')&&$('#dsrc').value)||'auto';return v==='auto'&&TDK()?'smart':v};
 async function td(sym,tf,force,abort){if(TFMS[tf]<6e4)return tkData(sym,tf);
-  if(DS()==='td'&&TDK()){try{return await tdApi(sym,tf,force,abort,true)}catch(e){if(e&&e.message==='superseded')throw e;KF.err='Twelve Data: '+(e&&e.message)}}
+  KF.tdErr='';if(TDK()&&(DS()==='td'||(DS()==='smart'&&!BN.ok(sym)))){try{return await tdApi(sym,tf,force,abort,true)}catch(e){if(e&&e.message==='superseded')throw e;KF.tdErr='Twelve Data: '+(e&&e.message)}}
   if(BN.ok(sym))return bnTd(sym,tf,force,abort);
-  try{return await kfTd(sym,tf,force,abort)}catch(e){if(!TDK()||DS()!=='auto'||(e&&e.message==='superseded'))throw e;KF.err=e&&e.message}
+  try{return await kfTd(sym,tf,force,abort)}catch(e){if(e&&e.message==='superseded')throw e;if(KF.tdErr)throw new Error(KF.tdErr+' | free feed: '+(e&&e.message));if(!TDK()||DS()!=='auto')throw e;KF.err=e&&e.message}
   return tdApi(sym,tf,force,abort,false)}
 async function tdApi(sym,tf,force,abort,strict){
   const k=sym+'|'+tf;let c=cache.get(k);if(!c){c=loadPers(k);if(c)cache.set(k,c)}
@@ -1595,7 +1595,9 @@ async function backtest(){
 }
 $('#bt').addEventListener('click',backtest);
 /* ===== EVENTS ===== */
-$('#key').value=store('tdkey')||'';$('#dsrc').value=store('dsrc')||'auto';$('#kfp').value=store('kfp')||'';$('#kfp').addEventListener('change',()=>{store('kfp',$('#kfp').value.trim());KF.dead={};KF.good=null;cache.clear();S.lastKey=null;load(true)});$('#dsrc').addEventListener('change',()=>{store('dsrc',$('#dsrc').value);cache.clear();S.lastKey=null;if(S.scan)S.scan=[];load(true)});
+function keyFp(){const k=TDK();let h=0;for(const ch of k)h=(h*31+ch.charCodeAt(0))|0;return k?String(h):''}
+function keyReset(){const f=keyFp();if(f&&store('tdkfp')!==f){store('tdkfp',f);try{localStorage.removeItem('tdout');localStorage.removeItem('tdcr')}catch(e){}cache.clear();KF.err='';KF.tdErr='';useCr(0);log('New Twelve Data key detected: credit counters reset')}}
+$('#key').value=store('tdkey')||'';keyReset();$('#dsrc').value=store('dsrc')||'auto';$('#kfp').value=store('kfp')||'';$('#kfp').addEventListener('change',()=>{store('kfp',$('#kfp').value.trim());KF.dead={};KF.good=null;cache.clear();S.lastKey=null;load(true)});$('#dsrc').addEventListener('change',()=>{store('dsrc',$('#dsrc').value);cache.clear();S.lastKey=null;if(S.scan)S.scan=[];load(true)});
 $('#key').addEventListener('input',()=>store('tdkey',TDK()));
 $('#testKey').addEventListener('click',async()=>{
   const k=TDK();if(!k){setSrc('Keyless feed active: gold, silver, FX, stocks and indices run without a key','live');return}
@@ -1603,10 +1605,10 @@ $('#testKey').addEventListener('click',async()=>{
   try{
     const j=await(await fetch(TDB()+'/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=1&apikey='+encodeURIComponent(k))).json();
     if(j.status==='error'||!j.values){setSrc(j.code===401?'Invalid API key':'Key problem: '+String(j.message).slice(0,70),'demo');log('Test key: '+j.message)}
-    else{setSrc('Key OK · EUR/USD '+j.values[0].close,'live');store('tdkey',k);log('Test key OK. If a symbol later fails with "not in your plan", pick another one (EUR/USD, BTC/USD, SPY).')}
+    else{setSrc('Key OK · EUR/USD '+j.values[0].close,'live');store('tdkey',k);keyReset();log('Test key OK. If a symbol later fails with "not in your plan", pick another one (EUR/USD, BTC/USD, SPY).')}
   }catch(e){setSrc('Blocked / offline','demo');log(await tdWhy())}
 });
-$('#key').addEventListener('change',()=>{store('tdkey',TDK());S.lastKey=null;load()});
+$('#key').addEventListener('change',()=>{store('tdkey',TDK());keyReset();S.lastKey=null;load()});
 $('#go').addEventListener('click',()=>{S.mode='live';S.lastKey=null;S.offset=0;load(true)});
 $('#tf').addEventListener('change',()=>{S.mode='live';S.lastKey=null;S.offset=0;load()});
 $('#sym').addEventListener('keydown',e=>{if(e.key==='Enter')$('#go').click()});
@@ -1788,7 +1790,7 @@ async function tfRun(){
     for(const sym of syms)for(const tf of sel){
       let st='no setup',cls='';
       try{
-        if(TFMS[tf]<3e5&&!BN.ok(sym))throw new Error('skipped below 5m');
+        {const tdo=TDK()&&DS()!=='free';if(TFMS[tf]<(tdo?9e5:3e5)&&!BN.ok(sym))throw new Error('skipped below '+(tdo?'15m (saves Twelve Data credits)':'5m'))}
         const d=await td(sym,tf),A=analyze(d,n);let ht=null;
         try{if(HTF[tf]&&TFMS[HTF[tf]]>=6e4)ht=analyze(await td(sym,HTF[tf]),n).trend}catch(e){}
         const px=d.px!=null?d.px:d[d.length-1].c,L=d.length,f=x=>fmt(x,sym),a=A.atr[L-1],bs=[S.M,S.K,S.cur,S.demo];let sg,K;
