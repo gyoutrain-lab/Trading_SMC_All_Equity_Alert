@@ -203,7 +203,7 @@ body.fsOn{overflow:hidden}
 <body>
 <header>
   <h1>SMC <span>Auto Analyzer</span></h1><button id="hdrTog" class="mob" aria-label="Settings" aria-expanded="false">⚙ Settings</button>
-  <input id="key" type="password" placeholder="Optional: Twelve Data key (backup only; every symbol runs keyless)" title="Stored only in this browser"><button id="testKey">Test key</button><button id="netChk">Network check</button><input id="tdp" type="text" placeholder="Optional: proxy URL (if Twelve Data is blocked)" title="Your own Cloudflare Worker URL; leave empty normally" style="width:190px">
+  <input id="key" type="password" placeholder="Optional: Twelve Data key (backup only; every symbol runs keyless)" title="Stored only in this browser"><button id="testKey">Test key</button><button id="netChk">Network check</button><select id="dsrc" class="adv" title="Where candles come from"><option value="auto">Source: free feeds first, Twelve Data backup</option><option value="td">Source: Twelve Data first (uses credits)</option><option value="free">Source: free feeds only</option></select><input id="kfp" class="adv" type="text" placeholder="Optional: feed Worker URL (Kraken/Yahoo relay)" title="Your own Cloudflare Worker, see worker/feed-proxy.js" style="width:210px"><input id="tdp" type="text" placeholder="Optional: proxy URL (if Twelve Data is blocked)" title="Your own Cloudflare Worker URL; leave empty normally" style="width:190px">
   <input id="sym" type="text" value="XAU/USD" list="symlist" title="Twelve Data symbol">
   <datalist id="symlist"><option>XAU/USD<option>XAG/USD<option>EUR/USD<option>GBP/USD<option>USD/JPY<option>AUD/USD<option>SPY<option>QQQ<option>GLD<option>AAPL<option>NVDA<option>BTC/USD<option>ETH/USD<option>GBP/JPY<option>EUR/JPY<option>USD/CAD<option>IWM<option>MSFT<option>TSLA</datalist>
   <select id="tf"><option value="1s">1s Tick</option><option value="5s">5s Tick</option><option value="15s">15s Tick</option><option value="30s">30s Tick</option><option value="1m">1m Scalp</option><option value="5m">5m Scalp</option><option value="15m">15m Intraday</option><option value="1h" selected>1h Day</option><option value="4h">4h Swing</option><option value="1d">1D Position</option></select>
@@ -384,27 +384,28 @@ async function bnTd(sym,tf,force,abort){const k=sym+'|'+tf,c=cache.get(k);
   if(c&&!force&&Date.now()-c.at<2e4)return c.d;
   const d=await bnRaw(sym,tf);if(abort&&abort())throw new Error('superseded');
   const lf=d[d.length-1].t+TFMS[tf]>Date.now(),cd=lf?d.slice(0,-1):d;
-  cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;cache.set(k,{at:Date.now(),d:cd});return cd}
+  cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;cd.src='Binance/Bybit feed';cache.set(k,{at:Date.now(),d:cd});return cd}
 async function bnPx(sym){
   if(!BN.dead.binance&&BN.m(sym)){try{const j=await _J('https://fapi.binance.com/fapi/v1/ticker/price?symbol='+BN.m(sym));if(+j.price>0)return+j.price}catch(e){}}
   const d=await bnTd(sym,'5m');return d.lv?d.lv.c:d.px}
 
 /* ===== KEYLESS FEED FOR EVERY OTHER TICKER (FX, stocks, ETF, indices, other crypto): Yahoo Finance chart, direct then public relays. Same no-key behaviour as gold/silver; Twelve Data is only a backup ===== */
+const FPU=()=>(($('#kfp')&&$('#kfp').value)||'').trim().replace(/\/+$/,''),FP=u=>{const p=FPU();return p?p+'?url='+encodeURIComponent(u):u};
 const KF={dead:{},good:null,src:'',on:true,iv:{'1m':'1m','5m':'5m','15m':'15m','1h':'60m','4h':'60m','1d':'1d','1w':'1wk'},rg:{'1m':'7d','5m':'60d','15m':'60d','1h':'730d','4h':'730d','1d':'5y','1w':'10y'},
  IDX:{SPX:'^GSPC',NDX:'^NDX',DJI:'^DJI',DXY:'DX-Y.NYB',VIX:'^VIX',US30:'^DJI',NAS100:'^NDX',SPX500:'^GSPC'},
  y:s=>{s=s.toUpperCase();if(KF.IDX[s])return KF.IDX[s];if(/^[A-Z]{3,5}\/[A-Z]{3}$/.test(s)){const[a,b]=s.split('/');return /^(BTC|ETH|SOL|XRP|BNB|DOGE|ADA|LTC|AVAX|LINK|DOT)$/.test(a)?a+'-'+b:a+b+'=X'}return s.replace('/','-')},
- routes:[u=>u,u=>'https://corsproxy.io/?url='+encodeURIComponent(u),u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u)],
+ routes:[u=>FP(u),u=>'https://corsproxy.io/?url='+encodeURIComponent(u),u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u)],
  names:['Yahoo direct','Yahoo via relay 1','Yahoo via relay 2','Yahoo via relay 3']};
 /* Kraken spot FX (CORS-open, no key): EUR/GBP/AUD vs USD, USD vs CAD/CHF/JPY; every other pair/cross is built from these legs */
 const KK={EUR:['EURUSD',0],GBP:['GBPUSD',0],AUD:['AUDUSD',0],CAD:['USDCAD',1],CHF:['USDCHF',1],JPY:['USDJPY',1]};
 async function krLeg(c,tf){if(c==='USD')return null;const e=KK[c];if(!e||!KR[tf])throw 0;
-  const j=await _J('https://api.kraken.com/0/public/OHLC?pair='+e[0]+'&interval='+KR[tf]),k=Object.keys(j.result||{}).find(x=>x!=='last');if(!k)throw 0;
+  const j=await _J(FP('https://api.kraken.com/0/public/OHLC?pair='+e[0]+'&interval='+KR[tf])),k=Object.keys(j.result||{}).find(x=>x!=='last');if(!k)throw 0;
   const m=new Map();j.result[k].forEach(x=>{let o=+x[1],h=+x[2],l=+x[3],c2=+x[4];if(e[1]){const H=1/l,L=1/h;o=1/o;c2=1/c2;h=H;l=L}m.set(+x[0]*1e3,{o,h,l,c:c2,v:+x[6]||0})});return m}
 async function krFx(sym,tf){const[a,b]=sym.split('/'),[A,B]=await Promise.all([krLeg(a,tf),krLeg(b,tf)]),u={o:1,h:1,l:1,c:1,v:0},ks=[...(A||B).keys()].filter(t=>(!A||A.has(t))&&(!B||B.has(t))).sort((x,y)=>x-y);
   return ks.map(t=>{const p=A?A.get(t):u,q=B?B.get(t):u,o=p.o/q.o,c=p.c/q.c;return{t,o,c,h:Math.max(o,c,p.h/q.c,p.c/q.l),l:Math.min(o,c,p.l/q.c,p.c/q.h),v:(p.v||0)+(q.v||0)}})}
 async function kfRaw(sym,tf){
   const U=sym.toUpperCase();
-  if(/^[A-Z]{3}\/[A-Z]{3}$/.test(U)&&!(KF.dead.kr&&Date.now()-KF.dead.kr<12e4)){try{const d=await krFx(U,tf);if(d&&d.length>=30){KF.good=null;KF.src='Kraken FX';return d}}catch(e){if(e&&(e.name==='AbortError'||e instanceof TypeError))KF.dead.kr=Date.now()}}
+  if(/^[A-Z]{3}\/[A-Z]{3}$/.test(U)&&!(KF.dead.kr&&Date.now()-KF.dead.kr<12e4)){try{const d=await krFx(U,tf);if(d&&d.length>=30){KF.good=null;KF.src='Kraken FX'+(FPU()?' via your Worker':'');return d}}catch(e){if(e&&(e.name==='AbortError'||e instanceof TypeError))KF.dead.kr=Date.now()}}
   const path=`/v8/finance/chart/${encodeURIComponent(KF.y(sym))}?interval=${KF.iv[tf]}&range=${KF.rg[tf]}&includePrePost=false`,errs=[];
   const order=[KF.good,0,1,2,3].filter((x,i,a)=>x!=null&&a.indexOf(x)===i);
   for(const r of order){if(KF.dead[r]&&Date.now()-KF.dead[r]<12e4){errs.push(KF.names[r]+'(net)');continue}
@@ -413,7 +414,7 @@ async function kfRaw(sym,tf){
         const j=await res.json(),R=j.chart&&j.chart.result&&j.chart.result[0];if(!R||!R.timestamp)throw 0;
         const q=R.indicators.quote[0],d=[];
         R.timestamp.forEach((t,i)=>{if(q.close[i]==null||q.open[i]==null||q.high[i]==null||q.low[i]==null)return;d.push({t:t*1e3,o:+q.open[i],h:+q.high[i],l:+q.low[i],c:+q.close[i],v:+q.volume[i]||0})});
-        if(d.length<30)throw 0;KF.good=r;KF.src=KF.names[r];return d}
+        if(d.length<30)throw 0;KF.good=r;KF.src=(r===0&&FPU()?'Yahoo via your Worker':KF.names[r]);return d}
       catch(e){if(e&&(e.name==='AbortError'||e instanceof TypeError)){KF.dead[r]=Date.now();errs.push(KF.names[r]+'(net)');break}errs.push(KF.names[r]+'/'+h+'(no data)')}}}
   throw new Error('No free feed reachable for '+sym+' ('+errs.slice(0,4).join(' ')+'). Use normal Chrome, pause ad-blockers, set Private DNS to one.one.one.one, or add a Twelve Data key as backup.')}
 function kfAgg(d,ms){const o=[];let c=null;for(const x of d){const b=Math.floor(x.t/ms)*ms;if(!c||c.t!==b){c={t:b,o:x.o,h:x.h,l:x.l,c:x.c,v:x.v};o.push(c)}else{c.h=Math.max(c.h,x.h);c.l=Math.min(c.l,x.l);c.c=x.c;c.v+=x.v}}return o}
@@ -424,7 +425,7 @@ async function kfTd(sym,tf,force,abort){
     d.sort((a,b)=>a.t-b.t);if(tf==='4h')d=kfAgg(d,TFMS['4h']);
     const lf=mkt(sym).open&&d[d.length-1].t+TFMS[tf]>Date.now(),cd=lf?d.slice(0,-1):d;
     if(cd.length<30)throw new Error('not enough candles for '+sym);
-    cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;const at=Date.now();cache.set(k,{at,d:cd});savePers(k,at,cd);return cd}
+    cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;cd.src=KF.src||'Free feed';const at=Date.now();cache.set(k,{at,d:cd});savePers(k,at,cd);return cd}
   catch(e){if(e&&e.message==='superseded')throw e;if(c){c.d.stale=true;return c.d}throw e}}
 
 /* ===== DATA: Twelve Data with credit-aware queue + cache (now BACKUP after the keyless feed) ===== */
@@ -454,18 +455,22 @@ async function tdWhy(){
     :'Your internet works but '+TDB().replace('https://','')+' cannot be reached: your network (ISP or DNS) is blocking it. Fix: Android Settings > Network > Private DNS > one.one.one.one (or install Cloudflare 1.1.1.1 / WARP), then reload. Permanent fix: deploy the free Cloudflare Worker (worker/twelvedata-proxy.js) and paste its URL in the proxy box in the header.';
   S.tdw={at:Date.now(),m};return m}
 async function netCheck(){
-  const H=[['Cloudflare','https://www.cloudflare.com/cdn-cgi/trace'],['Google','https://www.gstatic.com/generate_204'],['Twelve Data',TDB()+'/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=1&apikey=probe'],['Kraken FX (EUR/USD)','https://api.kraken.com/0/public/OHLC?pair=EURUSD&interval=60'],['Yahoo Finance','https://query1.finance.yahoo.com/v8/finance/chart/EURUSD=X?interval=60m&range=5d'],['Binance','https://fapi.binance.com/fapi/v1/ping'],['Bybit','https://api.bybit.com/v5/market/time'],['ntfy','https://ntfy.sh/']],out=[];
+  const H=[['Cloudflare','https://www.cloudflare.com/cdn-cgi/trace'],['Google','https://www.gstatic.com/generate_204'],['Twelve Data',TDB()+'/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=1&apikey=probe'],['Kraken FX (EUR/USD)','https://api.kraken.com/0/public/OHLC?pair=EURUSD&interval=60'],...(FPU()?[['Your Worker (Kraken)',FP('https://api.kraken.com/0/public/OHLC?pair=EURUSD&interval=60')]]:[]),['Yahoo Finance','https://query1.finance.yahoo.com/v8/finance/chart/EURUSD=X?interval=60m&range=5d'],['Binance','https://fapi.binance.com/fapi/v1/ping'],['Bybit','https://api.bybit.com/v5/market/time'],['ntfy','https://ntfy.sh/']],out=[];
   setSrc('Checking network…','demo');
   await Promise.all(H.map(async([n,u])=>{const t0=performance.now(),c=new AbortController();setTimeout(()=>c.abort(),7000);try{await fetch(u,{mode:'no-cors',cache:'no-store',signal:c.signal});out.push(n+': OK '+Math.round(performance.now()-t0)+' ms')}catch(e){out.push(n+': FAILED')}}));
   out.sort();const all=out.every(x=>x.includes('FAILED')),td=out.find(x=>x.startsWith('Twelve Data')),m=out.join('\n')+'\n\nPage: '+location.protocol+'//'+(location.host||'(local file)')+'\n'+(all?'Everything failed: the page is offline or sandboxed (preview or in-app browser). Open the GitHub Pages link in normal Chrome.':td.includes('FAILED')?'Only Twelve Data failed: your network blocks it. Use Private DNS one.one.one.one, WARP, or the proxy URL.':'Network looks fine.');
   setSrc('Network check done','');log(m.replace(/\n+/g,' | '));try{alert(m)}catch(e){}}
 $('#netChk').addEventListener('click',netCheck);
+const DS=()=>($('#dsrc')&&$('#dsrc').value)||'auto';
 async function td(sym,tf,force,abort){if(TFMS[tf]<6e4)return tkData(sym,tf);
+  if(DS()==='td'&&TDK()){try{return await tdApi(sym,tf,force,abort,true)}catch(e){if(e&&e.message==='superseded')throw e;KF.err='Twelve Data: '+(e&&e.message)}}
   if(BN.ok(sym))return bnTd(sym,tf,force,abort);
-  try{return await kfTd(sym,tf,force,abort)}catch(e){if(!TDK()||(e&&e.message==='superseded'))throw e;KF.err=e&&e.message}
+  try{return await kfTd(sym,tf,force,abort)}catch(e){if(!TDK()||DS()!=='auto'||(e&&e.message==='superseded'))throw e;KF.err=e&&e.message}
+  return tdApi(sym,tf,force,abort,false)}
+async function tdApi(sym,tf,force,abort,strict){
   const k=sym+'|'+tf;let c=cache.get(k);if(!c){c=loadPers(k);if(c)cache.set(k,c)}
   if(c&&!force&&fresh(sym,tf,c))return c.d;
-  const stale=m=>{if(c){c.d.stale=true;return c.d}throw new Error(m)};
+  const stale=m=>{if(c&&!strict){c.d.stale=true;return c.d}throw new Error(m)};
   if(store('tdout')===UTCD()||useCr(0)>=CRL())return stale('Free feed failed ('+(KF.err||'unknown')+') and Twelve Data daily credit budget is used (resets 00:00 UTC), no cached '+sym+' '+TD[tf]+' data');
   await slot(abort);
   useCr(1);
@@ -482,7 +487,7 @@ async function td(sym,tf,force,abort){if(TFMS[tf]<6e4)return tkData(sym,tf);
     const d=j.values.map(v=>({t:pt(v.datetime),o:+v.open,h:+v.high,l:+v.low,c:+v.close,v:+v.volume||0})).sort((a,b)=>a.t-b.t);
     if(d.length<60)throw new Error('not enough candles');
     const lf=mkt(sym).open&&d[d.length-1].t+TFMS[tf]>Date.now(),cd=lf?d.slice(0,-1):d;
-    cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;const at=Date.now();cache.set(k,{at,d:cd});savePers(k,at,cd);return cd;
+    cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;cd.src='Twelve Data';const at=Date.now();cache.set(k,{at,d:cd});savePers(k,at,cd);return cd;
   }
 }
 function demo(tf){
@@ -1322,7 +1327,7 @@ async function load(force){
   const tok=S.tok=(S.tok||0)+1;let data,live=false;S.sym=sym;S.cur=sym;S.closed=false;S.cp=null;setSrc('Loading…');
   if(S.mode==='csv'&&S.csv){data=S.csv;setSrc('CSV data')}
   else if(!KEY()){data=demo(tf);setSrc('DEMO · enter Twelve Data key','demo')}
-  else try{data=await td(sym,tf,force,()=>tok!==S.tok);if(tok!==S.tok)return;live=true;const lb=data.lv||data[data.length-1],op=mkt(sym).open,st=op&&Date.now()-lb.t>2.5*TFMS[tf];S.closed=!op||st;setSrc((BN.ok(sym)?'LIVE keyless · Binance/Bybit · ':'Twelve Data · ')+'last bar '+new Date(lb.t).toISOString().slice(5,16).replace('T',' ')+'Z'+(data.stale?' · CACHED: credit limit hit':st?' · STALE DATA':!op?' · MARKET CLOSED':''),S.closed?'demo':'live')}
+  else try{data=await td(sym,tf,force,()=>tok!==S.tok);if(tok!==S.tok)return;live=true;const lb=data.lv||data[data.length-1],op=mkt(sym).open,st=op&&Date.now()-lb.t>2.5*TFMS[tf];S.closed=!op||st;setSrc(((data.src||'Data')+' · ')+'last bar '+new Date(lb.t).toISOString().slice(5,16).replace('T',' ')+'Z'+(data.stale?' · CACHED: credit limit hit':st?' · STALE DATA':!op?' · MARKET CLOSED':''),S.closed?'demo':'live')}
   catch(e){if(tok!==S.tok)return;data=demo(tf);setSrc('DEMO · '+String(e.message).slice(0,60),'demo');log(sym+': '+e.message)}
   S.demo=!live&&!(S.mode==='csv'&&S.csv);
   S.candles=data.lv?data.concat([data.lv]):data;S.A=analyze(data,n);S.htfTrend=null;S.vp=vprofile(data,LB[tf]);S.amd=amd(data,S.A,S.vp);
@@ -1576,7 +1581,7 @@ async function backtest(){
 }
 $('#bt').addEventListener('click',backtest);
 /* ===== EVENTS ===== */
-$('#key').value=store('tdkey')||'';
+$('#key').value=store('tdkey')||'';$('#dsrc').value=store('dsrc')||'auto';$('#kfp').value=store('kfp')||'';$('#kfp').addEventListener('change',()=>{store('kfp',$('#kfp').value.trim());KF.dead={};KF.good=null;cache.clear();S.lastKey=null;load(true)});$('#dsrc').addEventListener('change',()=>{store('dsrc',$('#dsrc').value);cache.clear();S.lastKey=null;if(S.scan)S.scan=[];load(true)});
 $('#key').addEventListener('input',()=>store('tdkey',TDK()));
 $('#testKey').addEventListener('click',async()=>{
   const k=TDK();if(!k){setSrc('Keyless feed active: gold, silver, FX, stocks and indices run without a key','live');return}
