@@ -203,7 +203,7 @@ body.fsOn{overflow:hidden}
 <body>
 <header>
   <h1>SMC <span>Auto Analyzer</span></h1><button id="hdrTog" class="mob" aria-label="Settings" aria-expanded="false">⚙ Settings</button>
-  <input id="key" type="password" placeholder="Optional: Twelve Data key (not needed for XAU/XAG)" title="Stored only in this browser"><button id="testKey">Test key</button><button id="netChk">Network check</button><input id="tdp" type="text" placeholder="Optional: proxy URL (if Twelve Data is blocked)" title="Your own Cloudflare Worker URL; leave empty normally" style="width:190px">
+  <input id="key" type="password" placeholder="Optional: Twelve Data key (backup only; every symbol runs keyless)" title="Stored only in this browser"><button id="testKey">Test key</button><button id="netChk">Network check</button><input id="tdp" type="text" placeholder="Optional: proxy URL (if Twelve Data is blocked)" title="Your own Cloudflare Worker URL; leave empty normally" style="width:190px">
   <input id="sym" type="text" value="XAU/USD" list="symlist" title="Twelve Data symbol">
   <datalist id="symlist"><option>XAU/USD<option>XAG/USD<option>EUR/USD<option>GBP/USD<option>USD/JPY<option>AUD/USD<option>SPY<option>QQQ<option>GLD<option>AAPL<option>NVDA<option>BTC/USD<option>ETH/USD<option>GBP/JPY<option>EUR/JPY<option>USD/CAD<option>IWM<option>MSFT<option>TSLA</datalist>
   <select id="tf"><option value="1s">1s Tick</option><option value="5s">5s Tick</option><option value="15s">15s Tick</option><option value="30s">30s Tick</option><option value="1m">1m Scalp</option><option value="5m">5m Scalp</option><option value="15m">15m Intraday</option><option value="1h" selected>1h Day</option><option value="4h">4h Swing</option><option value="1d">1D Position</option></select>
@@ -389,7 +389,36 @@ async function bnPx(sym){
   if(!BN.dead.binance&&BN.m(sym)){try{const j=await _J('https://fapi.binance.com/fapi/v1/ticker/price?symbol='+BN.m(sym));if(+j.price>0)return+j.price}catch(e){}}
   const d=await bnTd(sym,'5m');return d.lv?d.lv.c:d.px}
 
-/* ===== DATA: Twelve Data with credit-aware queue + cache ===== */
+/* ===== KEYLESS FEED FOR EVERY OTHER TICKER (FX, stocks, ETF, indices, other crypto): Yahoo Finance chart, direct then public relays. Same no-key behaviour as gold/silver; Twelve Data is only a backup ===== */
+const KF={dead:{},good:null,src:'',on:true,iv:{'1m':'1m','5m':'5m','15m':'15m','1h':'60m','4h':'60m','1d':'1d','1w':'1wk'},rg:{'1m':'7d','5m':'60d','15m':'60d','1h':'730d','4h':'730d','1d':'5y','1w':'10y'},
+ IDX:{SPX:'^GSPC',NDX:'^NDX',DJI:'^DJI',DXY:'DX-Y.NYB',VIX:'^VIX',US30:'^DJI',NAS100:'^NDX',SPX500:'^GSPC'},
+ y:s=>{s=s.toUpperCase();if(KF.IDX[s])return KF.IDX[s];if(/^[A-Z]{3,5}\/[A-Z]{3}$/.test(s)){const[a,b]=s.split('/');return /^(BTC|ETH|SOL|XRP|BNB|DOGE|ADA|LTC|AVAX|LINK|DOT)$/.test(a)?a+'-'+b:a+b+'=X'}return s.replace('/','-')},
+ routes:[u=>u,u=>'https://corsproxy.io/?url='+encodeURIComponent(u),u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),u=>'https://api.codetabs.com/v1/proxy/?quest='+encodeURIComponent(u)],
+ names:['Yahoo direct','Yahoo via relay 1','Yahoo via relay 2','Yahoo via relay 3']};
+async function kfRaw(sym,tf){
+  const path=`/v8/finance/chart/${encodeURIComponent(KF.y(sym))}?interval=${KF.iv[tf]}&range=${KF.rg[tf]}&includePrePost=false`,errs=[];
+  const order=[KF.good,0,1,2,3].filter((x,i,a)=>x!=null&&a.indexOf(x)===i);
+  for(const r of order){if(KF.dead[r]&&Date.now()-KF.dead[r]<12e4){errs.push(KF.names[r]+'(net)');continue}
+    for(const h of['query1','query2']){
+      try{const res=await _T(KF.routes[r](`https://${h}.finance.yahoo.com${path}`),9000);if(!res.ok)throw 0;
+        const j=await res.json(),R=j.chart&&j.chart.result&&j.chart.result[0];if(!R||!R.timestamp)throw 0;
+        const q=R.indicators.quote[0],d=[];
+        R.timestamp.forEach((t,i)=>{if(q.close[i]==null||q.open[i]==null||q.high[i]==null||q.low[i]==null)return;d.push({t:t*1e3,o:+q.open[i],h:+q.high[i],l:+q.low[i],c:+q.close[i],v:+q.volume[i]||0})});
+        if(d.length<30)throw 0;KF.good=r;KF.src=KF.names[r];return d}
+      catch(e){if(e&&(e.name==='AbortError'||e instanceof TypeError)){KF.dead[r]=Date.now();errs.push(KF.names[r]+'(net)');break}errs.push(KF.names[r]+'/'+h+'(no data)')}}}
+  throw new Error('No free feed reachable for '+sym+' ('+errs.slice(0,4).join(' ')+'). Use normal Chrome, pause ad-blockers, set Private DNS to one.one.one.one, or add a Twelve Data key as backup.')}
+function kfAgg(d,ms){const o=[];let c=null;for(const x of d){const b=Math.floor(x.t/ms)*ms;if(!c||c.t!==b){c={t:b,o:x.o,h:x.h,l:x.l,c:x.c,v:x.v};o.push(c)}else{c.h=Math.max(c.h,x.h);c.l=Math.min(c.l,x.l);c.c=x.c;c.v+=x.v}}return o}
+async function kfTd(sym,tf,force,abort){
+  const k='kf:'+sym+'|'+tf;let c=cache.get(k);if(!c){c=loadPers(k);if(c)cache.set(k,c)}
+  if(c&&!force&&(Date.now()-c.at<45e3||(!mkt(sym).open&&fresh(sym,tf,c))))return c.d;
+  try{let d=await kfRaw(sym,tf);if(abort&&abort())throw new Error('superseded');
+    d.sort((a,b)=>a.t-b.t);if(tf==='4h')d=kfAgg(d,TFMS['4h']);
+    const lf=mkt(sym).open&&d[d.length-1].t+TFMS[tf]>Date.now(),cd=lf?d.slice(0,-1):d;
+    if(cd.length<30)throw new Error('not enough candles for '+sym);
+    cd.lv=lf?d[d.length-1]:null;cd.px=d[d.length-1].c;cd.stale=false;const at=Date.now();cache.set(k,{at,d:cd});savePers(k,at,cd);return cd}
+  catch(e){if(e&&e.message==='superseded')throw e;if(c){c.d.stale=true;return c.d}throw e}}
+
+/* ===== DATA: Twelve Data with credit-aware queue + cache (now BACKUP after the keyless feed) ===== */
 const cache=new Map();let qT=0;
 const ttl=tf=>({'1m':6e4,'5m':12e4,'15m':3e5,'1h':9e5,'4h':18e5,'1d':72e5,'1w':216e5})[tf];
 const gap=()=>60000/Math.max(1,+$('#cpm').value||8)+300;
@@ -424,7 +453,7 @@ async function netCheck(){
 $('#netChk').addEventListener('click',netCheck);
 async function td(sym,tf,force,abort){if(TFMS[tf]<6e4)return tkData(sym,tf);
   if(BN.ok(sym))return bnTd(sym,tf,force,abort);
-  if(!TDK())throw new Error('Keyless mode covers XAU/USD, XAG/USD, XPT/USD, BTC/USD, ETH/USD. Add a Twelve Data key for '+sym);
+  try{return await kfTd(sym,tf,force,abort)}catch(e){if(!TDK()||(e&&e.message==='superseded'))throw e}
   const k=sym+'|'+tf;let c=cache.get(k);if(!c){c=loadPers(k);if(c)cache.set(k,c)}
   if(c&&!force&&fresh(sym,tf,c))return c.d;
   const stale=m=>{if(c){c.d.stale=true;return c.d}throw new Error(m)};
@@ -1441,7 +1470,7 @@ async function scan0(){
 async function scan(){if(S.scanBusy)return;S.scanBusy=true;try{await scan0()}finally{S.scanBusy=false}}
 function useCr(k){const day=new Date().toISOString().slice(0,10);let o={};try{o=JSON.parse(localStorage.getItem('tdcr')||'{}')}catch(e){}if(o.d!==day)o={d:day,n:0};o.n+=k;try{localStorage.setItem('tdcr',JSON.stringify(o))}catch(e){}$('#cr').textContent='credits today ≈ '+o.n+'/'+CRL()+(store('tdout')===day?' · LIMIT HIT: using cache':'');return o.n}
 function sbuild(sym,h,st,n){const d=S.D[sym],A=analyze(d,n);S.cur=sym;const r={sym,A,h,sg:buildSignal(d,A,h,d.px),am:amd(d,A,vprofile(d,LB[st]))};S.cur=null;return r}
-async function livePx(sym){if(BN.ok(sym))return bnPx(sym);await slot();
+async function livePx(sym){if(BN.ok(sym))return bnPx(sym);try{const d=await kfTd(sym,'1m'),p=d.lv?d.lv.c:d.px;if(p>0)return p}catch(e){}if(!TDK())return null;await slot();
   const j=await(await fetch(`${TDB()}/price?symbol=${encodeURIComponent(sym)}&apikey=${encodeURIComponent(TDK())}`)).json();useCr(1);return j&&j.price?+j.price:null}
 const sk=r=>r.sg.status+'|'+r.sg.inZone+'|'+(r.sg.entry!=null);
 function chg(r,b){if(sk(r)!==b){const m=`${r.sym}: ${r.sg.status}${r.sg.entry!=null?' @ '+fmt(r.sg.entry,r.sym):''}${r.sg.inZone?' · IN ZONE':''}`;log(m);notify(m)}}
@@ -1452,7 +1481,7 @@ async function autoCycle(){
   S.asBusy=true;
   try{
     if(!S.scan.length){await scan();S.asNext=Date.now()+60000;return}
-    if(useCr(0)>=CRL()-30){$('#asc').checked=false;$('#prog').textContent='Daily free-credit budget nearly used: live auto-scan paused';return}
+    if(TDK()&&KF.good===null&&useCr(0)>=CRL()-30){$('#asc').checked=false;$('#prog').textContent='Daily free-credit budget nearly used: live auto-scan paused';return}
     const st=$('#scStyle').value,n=clamp(+$('#swl').value||5,2,15),useH=$('#scHtf').checked,open=S.scan.filter(r=>!r.err&&mkt(r.sym).open);
     if(!open.length){$('#prog').textContent='Live · all markets closed, waiting';S.asNext=Date.now()+300000;return}
     for(const r of open){if(!$('#asc').checked)break;$('#prog').textContent='Live · checking '+r.sym;
@@ -1541,7 +1570,7 @@ $('#bt').addEventListener('click',backtest);
 $('#key').value=store('tdkey')||'';
 $('#key').addEventListener('input',()=>store('tdkey',TDK()));
 $('#testKey').addEventListener('click',async()=>{
-  const k=TDK();if(!k){setSrc('Keyless feed active: no key needed for gold/silver','live');return}
+  const k=TDK();if(!k){setSrc('Keyless feed active: gold, silver, FX, stocks and indices run without a key','live');return}
   setSrc('Testing key…');
   try{
     const j=await(await fetch(TDB()+'/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=1&apikey='+encodeURIComponent(k))).json();
@@ -1718,7 +1747,7 @@ const FXP=['XAU/USD','XAG/USD','EUR/USD','GBP/USD','USD/JPY','AUD/USD','USD/CAD'
 function sessCur(){const n=new Date(),h=n.getUTCHours()+n.getUTCMinutes()/60,c=[];if(h>=22||h<7)c.push('JPY','AUD','NZD');if(h>=7&&h<16)c.push('EUR','GBP','CHF');if(h>=12&&h<21)c.push('USD','CAD','EUR','GBP');return c}
 async function autoPick(n){
   if(AD.auto&&Date.now()-AD.auto.at<9e5)return AD.auto.list;
-  const h=new Date().getUTCHours(),cur=sessCur(),cand=FXP.filter(s=>mkt(s).open&&(/^XA[UG]/.test(s)?h>=7&&h<17:(BN.ok(s)||!!TDK())&&s.split('/').some(x=>cur.includes(x)))),sc=[];
+  const h=new Date().getUTCHours(),cur=sessCur(),cand=FXP.filter(s=>mkt(s).open&&(/^XA[UG]/.test(s)?h>=7&&h<17:s.split('/').some(x=>cur.includes(x)))),sc=[];
   for(const s of cand){try{const d=await td(s,'1h'),A=analyze(d,n),L=d.length,a=A.atr[L-1],px=d.px!=null?d.px:d[L-1].c,e=envChk(d,A,L),cost=INFO(s,px).spr/a,bal=+$('#bal').value||0,q=quoteUSD(s,px);if(bal>0&&bal<=200&&q&&.01*cs(s)*1.5*a*q/bal>.25)continue;
     if(cost<=.2&&e.er>=.2&&e.ratio>=.6&&e.ratio<=1.8)sc.push({s,v:Math.min(e.er/.45,1)*50+(1-Math.min(cost*5,1))*30+Math.min(e.ratio,1.4)/1.4*20})}catch(x){}}
   sc.sort((x,y)=>y.v-x.v);AD.auto={at:Date.now(),list:sc.slice(0,4).map(x=>x.s),cand:cand.length};return AD.auto.list}
@@ -1731,7 +1760,7 @@ async function tfRun(){
     for(const sym of syms)for(const tf of sel){
       let st='no setup',cls='';
       try{
-        if(TFMS[tf]<9e5&&!BN.ok(sym))throw new Error('skipped below 15m (saves API credits)');
+        if(TFMS[tf]<3e5&&!BN.ok(sym))throw new Error('skipped below 5m');
         const d=await td(sym,tf),A=analyze(d,n);let ht=null;
         try{if(HTF[tf]&&TFMS[HTF[tf]]>=6e4)ht=analyze(await td(sym,HTF[tf]),n).trend}catch(e){}
         const px=d.px!=null?d.px:d[d.length-1].c,L=d.length,f=x=>fmt(x,sym),a=A.atr[L-1],bs=[S.M,S.K,S.cur,S.demo];let sg,K;
@@ -1880,7 +1909,7 @@ function microCalc(sym,entry,sl,tp1){
 }
 async function mdScan(){
   if(S.mdBusy)return;S.mdBusy=true;
-  const tf=$('#mdTf').value,n=clamp(+$('#swl').value||5,2,15),bal=+$('#bal').value||0,cm=+$('#mdCm').value||0,list=MD_LIST.filter(s=>BN.ok(s)||TDK()),rows=[],R={};
+  const tf=$('#mdTf').value,n=clamp(+$('#swl').value||5,2,15),bal=+$('#bal').value||0,cm=+$('#mdCm').value||0,list=MD_LIST,rows=[],R={};
   try{
     for(let i=0;i<list.length;i++){const s=list[i];$('#mdOut').innerHTML=`<div class="hint">Loading ${s} (${i+1}/${list.length})…</div>`;
       try{const d=await td(s,tf),A=analyze(d,n),L=d.length,px=d.px!=null?d.px:d[L-1].c;R[s]=px;rows.push({s,px,a:A.atr[L-1]})}catch(e){rows.push({s,err:String(e.message).slice(0,70)})}}
